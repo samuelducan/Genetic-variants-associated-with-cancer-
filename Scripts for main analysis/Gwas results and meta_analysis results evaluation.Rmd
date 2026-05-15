@@ -1,0 +1,579 @@
+---
+title: "Final_GWAS data analysis and meta -analysis"
+author: "samuel"
+date: "2026-05-15"
+output: html_document
+---
+
+```{r}
+#load tools
+
+library(ggplot2)
+library(qqman)
+library(dplyr)
+library(ggrepel)
+
+
+```
+
+
+```{r}
+#load GWAS output data
+Log23_100 <- read_table("~/Gwas_final/final_pc23_gwas.assoc.logistic")
+
+
+```
+
+```{r}
+#plotting a qqplot 
+
+qq(Log23_100$P)
+```
+
+
+```{r}
+# preparing the data for manhattan plot
+
+Logpc23_100 <- Log23_100 %>% 
+  
+  # Compute chromosome size
+  group_by(CHR) %>% 
+  summarise(chr_len=max(BP)) %>% 
+  
+  # Calculate cumulative position of each chromosome
+  mutate(tot=cumsum(chr_len)-chr_len) %>%
+  select(-chr_len) %>%
+  
+  # Add this info to the initial dataset
+  left_join(Log23_100, ., by=c("CHR"="CHR")) %>%
+  
+  # Add a cumulative position of each SNP
+  arrange(CHR, BP) %>%
+  mutate( BPcum=BP+tot) %>%
+
+  # Add highlight and annotation information
+  #mutate(is_highlight = ifelse(-log10(P) > 7.3, "yes", "no")) %>%
+  mutate( is_annotate=ifelse(-log10(P)>7.3, "yes", "no")) 
+
+# Prepare X axis
+axisdf <- Logpc23_100 %>% group_by(CHR) %>% summarize(center=( max(BPcum) + min(BPcum) ) / 2 )
+```
+
+
+```{r}
+#ploting ggplot manhattan
+ggplot(Logpc23_100, aes(x = BPcum, y = -log10(P))) +
+  geom_point(aes(color = as.factor(CHR)), alpha = 0.8, size = 1.3) +
+  scale_color_manual(values = rep(c("brown", "skyblue"), 22)) +
+  scale_x_continuous(labels = axisdf$CHR, breaks = axisdf$center) +
+  scale_y_continuous(expand = c(0, 0),limits = c(0, 12.5)) +
+  geom_hline(yintercept = 7.3, color = "red", linetype = "dashed") +  # e
+  #geom_hline(yintercept = 8, color = "blue", linetype = "dashed") + #lowerlimit
+  theme_bw() +
+   # Add highlighted points
+  #geom_point(data=subset(metaan2, is_highlight=="yes"), color="orange", size=2) +
+  
+    # Add label using ggrepel to avoid overlapping
+  geom_label_repel( data=subset(Logpc23_100, is_annotate=="yes"), aes(label=SNP), size=2) +
+  
+  theme(
+    legend.position = "none",
+    panel.border = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank()
+  ) +
+  xlab("Genomic Position") +
+  ylab("-log10(p-value)")
+
+```
+
+
+```{r}
+#bonferoni correction
+n_tests <- nrow(done)  # or replace with the total number of SNPs if different
+
+# Desired significance level
+alpha <- 0.05
+
+# Bonferroni correction is standard of significance
+bonferroni_threshold <- alpha / n_tests
+bonferroni_threshold
+log10_threshold <- -log10(bonferroni_threshold)
+log10_threshold #upper limit
+
+
+#lower limit
+alpha <- 0.05
+lowerthreshold = alpha/1000000
+threshold = -log10(lowerthreshold)
+
+
+```
+
+
+
+```{r}
+#calculating additional parameters
+Logpc23_100$beta<- log(Logpc23_100$OR)
+Logpc23_100$SE <- Logpc23_100$beta/Logpc23_100$STAT
+
+```
+
+```{r}
+#including sample size
+Logpc23_100$N <- 107
+```
+
+
+
+```{r}
+#Preparing GWAMA tables
+gwama_cev <- filtered_gwas2 %>%
+  mutate(
+    # Marker name
+    MARKERNAME = SNP,
+    
+    # Effect allele
+    EA = A1,
+    
+    # Other allele
+    NEA = A2,
+    
+    # Effect allele frequency (make sure this exists in your data)
+    EAF = F_U,
+    
+    # Effect (OR) – if you only have beta, convert if needed
+    OR = OR,
+    
+    # 95% CI
+    OR_95U = exp(beta + 1.96 * SE),
+    OR_95L = exp(beta - 1.96 * SE),
+    
+    # Strand
+    STRAND = "+",
+    
+    # Sample size
+    N = N,
+    
+    # Chromosome
+    CHROMOSOME = CHR,
+    
+    # Position
+    POSITION = BP
+  ) %>%
+  select(
+    MARKERNAME,
+    EA,
+    NEA,
+    EAF,
+    OR,
+    OR_95U,
+    OR_95L,
+    STRAND,
+    N,
+    CHROMOSOME,
+    POSITION
+  )
+
+write.csv(gwama_clean, "E:/Gwas_final/cev_input.csv", row.names = FALSE)
+```
+
+
+
+
+```{r}
+#gwama_clean <- na.omit(gwama_cev)
+
+# Write out to a CSV for GWAMA (if needed)
+
+```
+
+
+
+```{r}
+#loading GWAS summary statistics from GWAS catalog
+metastat_1 <- read_table("E:/Gwas/GWAMA/GCST012776.h.tsv.gz")
+metastat_2 <- read_table("E:/Gwas/GWAMA/34594039-GCST90018817-EFO_0001061.h.tsv.gz")
+metasta_3 <- read_table("E:/Gwas/GWAMA/34594039-GCST90018597-EFO_0001061.h.tsv.gz")
+metasta_4 <- read_table("E:/Gwas/GWAMA/34737426-GCST90043929-MONDO_0042487.h.tsv.gz")
+
+
+```
+
+
+```{r}
+#Preparing gwamma input for summary statistics
+
+metastat_1$N <- 1224
+
+#prepare gwas_cat meta 1
+meta1 <- metastat_1 %>%
+  mutate(
+    # Marker name
+    MARKERNAME = rsid,   # or SNP_id if preferred
+    
+    # Effect allele
+    EA = effect_allele,
+    
+    # Other allele
+    NEA = other_allele,
+    
+    # Effect allele frequency
+    EAF = effect_allele_frequency,
+    
+    # Odds ratio
+    OR = odds_ratio,
+    
+    # 95% CI (derived from SE of log OR)
+    OR_95U = exp(log(odds_ratio) + 1.96 * standard_error),
+    OR_95L = exp(log(odds_ratio) - 1.96 * standard_error),
+    
+    # Strand (assumed)
+    STRAND = "+",
+    
+    # Sample size (replace with real N if available)
+    N = N ,
+    
+    # Chromosome
+    CHROMOSOME = chromosome,
+    
+    # Position
+    POSITION = base_pair_location
+  ) %>%
+  select(
+    MARKERNAME,
+    EA,
+    NEA,
+    EAF,
+    OR,
+    OR_95U,
+    OR_95L,
+    STRAND,
+    N,
+    CHROMOSOME,
+    POSITION
+  )
+
+write.csv(meta1, "E:/Gwas_final/cat1_meta.csv", row.names = FALSE)
+```
+
+
+```{r}
+#metastat_2
+
+#metastat_2$N <- 300739  meta
+#actual
+meta2 <- metastat_2 %>%
+  mutate(
+    # Marker name
+    MARKERNAME = hm_rsid,
+    
+    # Alleles (harmonised)
+    EA = hm_effect_allele,
+    NEA = hm_other_allele,
+    
+    # Effect allele frequency (if available separately)
+    # Replace with correct column if you have hm_eaf
+    EAF = effect_allele_frequency,
+    
+    # Odds ratio
+    OR = exp(hm_beta),
+    
+    # Confidence intervals (already provided!)
+    OR_95L = exp(hm_beta - 1.96 * standard_error),
+    OR_95U = exp(hm_beta + 1.96 * standard_error),
+    
+    # Strand
+    STRAND = "+",
+    
+    # Sample size (replace properly)
+    N = N,
+    
+    # Chromosome & position (if available)
+    CHROMOSOME = chromosome,
+    POSITION = base_pair_location
+  ) %>%
+  select(
+    MARKERNAME,
+    EA,
+    NEA,
+    EAF,
+    OR,
+    OR_95U,
+    OR_95L,
+    STRAND,
+    N,
+    CHROMOSOME,
+    POSITION
+  )
+write.csv(meta2, "E:/Gwas_final/cat2_meta.csv", row.names = FALSE)
+```
+
+
+```{r}
+#adding sample size
+metasta_3$N <- 61581
+#main analy
+meta3 <- metasta_3 %>%
+  mutate(
+    # Marker name
+    MARKERNAME = hm_rsid,
+    
+    # Alleles (harmonised)
+    EA = hm_effect_allele,
+    NEA = hm_other_allele,
+    
+    # Effect allele frequency (if available separately)
+    # Replace with correct column if you have hm_eaf
+    EAF = effect_allele_frequency,
+    
+    # Odds ratio
+    OR = exp(hm_beta),
+    
+    # Confidence intervals (already provided!)
+    OR_95L = exp(hm_beta - 1.96 * standard_error),
+    OR_95U = exp(hm_beta + 1.96 * standard_error),
+    
+    # Strand
+    STRAND = "+",
+    
+    # Sample size (replace properly)
+    N = N,
+    
+    # Chromosome & position (if available)
+    CHROMOSOME = chromosome,
+    POSITION = base_pair_location
+  ) %>%
+  select(
+    MARKERNAME,
+    EA,
+    NEA,
+    EAF,
+    OR,
+    OR_95U,
+    OR_95L,
+    STRAND,
+    N,
+    CHROMOSOME,
+    POSITION
+  )
+
+write.csv(meta3, "E:/Gwas_final/cat3_meta.csv", row.names = FALSE)
+```
+
+
+```{r}
+#add sample size
+metasta_4$N <- 247540
+#actual analysis
+meta4 <- metasta_4 %>%
+  mutate(
+    # Marker name
+    MARKERNAME = hm_rsid, 
+    
+    # Alleles (harmonised)
+    EA = hm_effect_allele,
+    NEA = hm_other_allele,
+    
+    # Effect allele frequency (if available separately)
+    # Replace with correct column if you have hm_eaf
+    EAF = hm_effect_allele_frequency,
+    
+    # Odds ratio
+    OR = exp(hm_beta),
+    
+    # Confidence intervals (already provided!)
+    OR_95L = exp(hm_beta - 1.96 * standard_error),
+    OR_95U = exp(hm_beta + 1.96 * standard_error),
+    
+    # Strand
+    STRAND = "+",
+    
+    # Sample size (replace properly)
+    N = N,
+    
+    # Chromosome & position (if available)
+    CHROMOSOME = hm_chrom,
+    POSITION = hm_pos
+  ) %>%
+  select(
+    MARKERNAME,
+    EA,
+    NEA,
+    EAF,
+    OR,
+    OR_95U,
+    OR_95L,
+    STRAND,  
+    N,
+    CHROMOSOME,
+    POSITION
+  )
+write.csv(meta4, "E:/Gwas_final/cat4_meta.csv", row.names = FALSE)
+
+```
+
+
+
+```{r}
+
+#load gwama results following running on linux computer
+
+gwama_out <- read_table("E:/Gwas_final/gwama_final/gwama.out")
+
+```
+
+
+```{r}
+# ploting a manhattan plot from gwama results
+# selecting chromosomes and positions
+
+sele_gwas2_col <- Logpc23_100[, c("CHR", "SNP", "BP", "P", "OR", "beta")]
+
+
+#rename the column in filtered_sig to SNP to match gwas column
+colnames(gwama_out)[colnames(gwama_out) == "rs_number"] <- "SNP"
+
+#merge the data based on SNP
+merged_gwas2 <- merge(sele_gwas2_col, gwama_out, by = "SNP", all.x = TRUE)
+
+#assigning true significant values
+merged_gwas2$is_significant <- ifelse(merged_gwas2$`p-value` < 0.05, TRUE, FALSE)
+
+# Update 'is_significant' to check if 'meta p value' is less than 0.05 and not NA
+merged_gwas2$is_significant_meta <- ifelse(!is.na(merged_gwas2$`p-value`) & 
+merged_gwas2$`p-value` < 0.05, TRUE, FALSE)
+
+#select pontential significant SNPs after meta analysis(IMPORTANT)
+significant_snps <- merged_gwas2[merged_gwas2$is_significant_meta == TRUE, ]
+
+```
+
+```{r}
+#preparing to plot manhattan
+
+merged_gwas2$`p-value`[is.na(merged_gwas2$`p-value`)] <- 0
+
+#create a data frame for new plot
+
+metaan <- merged_gwas2 %>% 
+  
+  # Compute chromosome size
+  group_by(CHR) %>% 
+  summarise(chr_len=max(BP)) %>% 
+  
+  # Calculate cumulative position of each chromosome
+  mutate(tot=cumsum(chr_len)-chr_len) %>%
+  select(-chr_len) %>%
+  
+  # Add this info to the initial dataset
+  left_join(merged_gwas2, ., by=c("CHR"="CHR")) %>%
+  
+  # Add a cumulative position of each SNP
+  arrange(CHR, BP) %>%
+  mutate( BPcum=BP+tot) %>%
+
+  # Add highlight and annotation information
+  mutate(is_highlight = ifelse(-log10(`p-value`) > 7.3, "yes", "no")) %>%
+  mutate( is_annotate=ifelse(-log10(`p-value`)>9, "yes", "no")) 
+
+# Prepare X axis
+axisdf <- metaan %>% group_by(CHR) %>% summarize(center=( max(BPcum) + min(BPcum) ) / 2 )
+
+```
+
+
+```{r}
+ggplot(metaan2, aes(x = BPcum, y = -log10(`p-value`))) +
+  geom_point(aes(color = as.factor(CHR)), alpha = 0.8, size = 1.3) +
+  scale_color_manual(values = rep(c("brown", "pink"), 22)) +
+  scale_x_continuous(labels = axisdf$CHR, breaks = axisdf$center) +
+  scale_y_continuous(expand = c(0, 0),limits = c(1, 12.5)) +
+  geom_hline(yintercept = 7.3, color = "red", linetype = "dashed") +  # e
+  geom_hline(yintercept = upper_line, color = "blue", linetype = "dashed") + #lowerlimit
+  theme_bw() +
+   # Add highlighted points
+  #geom_point(data=subset(metaan2, is_highlight=="yes"), color="orange", size=2) +
+  
+    # Add label using ggrepel to avoid overlapping
+  geom_label_repel( data=subset(metaan2, is_annotate=="yes"), aes(label=SNP), size=2) +
+  
+  theme(
+    legend.position = "none",
+    panel.border = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank()
+  ) +
+  xlab("Genomic Position") +
+  ylab("-log10(p-value)")
+
+
+```
+
+
+### working on heterogeneity
+
+```{r}
+Gwama_data <- gwama_out %>% filter(n_studies == 5)
+
+Gwama_data$lower <- Gwama_data$beta - 1.96 * Gwama_data$se
+Gwama_data$upper <- Gwama_data$beta + 1.96 * Gwama_data$se
+```
+
+```{r}
+#selecting significant SNPs
+Gwama_data$is_significant <- ifelse(Gwama_data$`p-value` < 0.05, TRUE, FALSE)
+Meta_sign <- Gwama_data[Gwama_data$is_significant == TRUE, ]
+pont_sig <- Meta_sign[Meta_sign$`p-value` < 5e-8, ]
+
+```
+
+
+```{r}
+#Chcking for heterogeneity among significant SNPs
+library(metafor)
+res <- rma(yi = pont_sig$beta, sei = pont_sig$se, method = "REML")
+
+summary(res)
+```
+
+```{R}
+
+#selcting SNPs based on heterogeneity
+homogen_snps <- pont_sig %>%
+  filter(`q_p-value` >= 0.05 & i2 <= 0.50)
+
+heterogen_snps <- pont_sig %>%
+  filter(`q_p-value` < 0.05 & i2 > 0.50)
+
+
+```
+
+```{r}
+#creating a forest plot
+```{r}
+forest(
+  final_res2,
+  transf = exp,
+  refline = 1,
+  slab = heterogen_snps$rs_number,
+  xlab = "Effect Size (OR)",
+  main = "Forest Plot for Heterogeneous SNPs"
+)
+
+mtext(
+  paste0("Heterogeneity: Q = ", round(Q,2),
+         ", p = ", format.pval(Qp, digits = 2),
+         ", I² = ", round(I2,1), "%",
+         ", τ² = ", round(tau2,3)),
+  side = 1,
+  line = 3,
+  cex = 0.8
+)
+
+```
+
+#following heterogeneity significance,  rerunning the analysis with a random effect or excluding the heterogeneous SNps can be done. we opted for a rerun using random effect model.
+
+
+
